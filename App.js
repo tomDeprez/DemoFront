@@ -1,13 +1,58 @@
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, Alert } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import axios from 'axios';
-import { useState } from 'react';
+import { useState, useEffect, createContext, useContext } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const Stack = createStackNavigator();
+
+// Contexte pour gérer l'authentification
+const AuthContext = createContext();
+
+// Fournisseur de contexte d'authentification
+function AuthProvider({ children }) {
+  const [token, setToken] = useState(null);
+  const [user, setUser] = useState(null);
+
+  useEffect(() => {
+    // Charger le token au démarrage
+    const loadToken = async () => {
+      const storedToken = await AsyncStorage.getItem('token');
+      const storedUser = await AsyncStorage.getItem('user');
+      if (storedToken && storedUser) {
+        setToken(storedToken);
+        setUser(JSON.parse(storedUser));
+        axios.defaults.headers.common['Authorization'] = `Bearer ${storedToken}`;
+      }
+    };
+    loadToken();
+  }, []);
+
+  const login = async (newToken, userData) => {
+    await AsyncStorage.setItem('token', newToken);
+    await AsyncStorage.setItem('user', JSON.stringify(userData));
+    setToken(newToken);
+    setUser(userData);
+    axios.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
+  };
+
+  const logout = async () => {
+    await AsyncStorage.removeItem('token');
+    await AsyncStorage.removeItem('user');
+    setToken(null);
+    setUser(null);
+    delete axios.defaults.headers.common['Authorization'];
+  };
+
+  return (
+    <AuthContext.Provider value={{ token, user, login, logout }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
 
 // Écran d'inscription
 function RegisterScreen({ navigation }) {
@@ -18,22 +63,19 @@ function RegisterScreen({ navigation }) {
 
   const handleRegister = async () => {
     try {
-      const response = await axios.post('http://localhost:8000/api/register', {
+      const response = await axios.post(`${process.env.EXPO_PUBLIC_API_URL}/api/register`, {
         email,
         password,
       });
-      alert(response.data.message);
+      Alert.alert('Succès', response.data.message);
       navigation.navigate('Login');
     } catch (error) {
-      alert(error.response?.data?.error || 'Erreur lors de l\'inscription');
+      Alert.alert('Erreur', error.response?.data?.error || 'Erreur lors de l\'inscription');
     }
   };
 
   return (
-    <LinearGradient
-      colors={['#FF6F61', '#6B5B95', '#88B04B']}
-      style={styles.container}
-    >
+    <View style={styles.container}>
       <Text style={styles.title}>Create account</Text>
       <View style={styles.inputContainer}>
         <Icon name="person" size={20} color="#888" style={styles.icon} />
@@ -83,7 +125,7 @@ function RegisterScreen({ navigation }) {
         <TouchableOpacity style={[styles.socialButton, { backgroundColor: '#00acee' }]} />
         <TouchableOpacity style={[styles.socialButton, { backgroundColor: '#dd4b39' }]} />
       </View>
-    </LinearGradient>
+    </View>
   );
 }
 
@@ -91,24 +133,25 @@ function RegisterScreen({ navigation }) {
 function LoginScreen({ navigation }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const { login } = useContext(AuthContext);
 
   const handleLogin = async () => {
     try {
-      const response = await axios.post('http://localhost:8000/api/login', {
-        email: username, // On utilise username comme email ici
+      const response = await axios.post(`${process.env.EXPO_PUBLIC_API_URL}/api/login`, {
+        email: username,
         password,
       });
-      alert(response.data.message);
+      const { token, email } = response.data;
+      await login(token, { email });
+      Alert.alert('Succès', response.data.message);
+      navigation.navigate('Home');
     } catch (error) {
-      alert(error.response?.data?.error || 'Erreur lors de la connexion');
+      Alert.alert('Erreur', error.response?.data?.error || 'Erreur lors de la connexion');
     }
   };
 
   return (
-    <LinearGradient
-      colors={['#FF6F61', '#6B5B95', '#88B04B']}
-      style={styles.container}
-    >
+    <View style={styles.container}>
       <Text style={styles.title}>Hello</Text>
       <Text style={styles.subtitle}>Sign in to your account</Text>
       <View style={styles.inputContainer}>
@@ -140,25 +183,49 @@ function LoginScreen({ navigation }) {
       <TouchableOpacity onPress={() => navigation.navigate('Register')}>
         <Text style={styles.createAccount}>Don't have an account? Create</Text>
       </TouchableOpacity>
-    </LinearGradient>
+    </View>
+  );
+}
+
+// Écran protégé (Home)
+function HomeScreen({ navigation }) {
+  const { user, logout } = useContext(AuthContext);
+
+  const handleLogout = async () => {
+    await logout();
+    navigation.navigate('Login');
+  };
+
+  return (
+    <View style={styles.container}>
+      <Text style={styles.title}>Welcome, {user?.email}!</Text>
+      <TouchableOpacity style={styles.button} onPress={handleLogout}>
+        <Text style={styles.buttonText}>Logout</Text>
+        <Icon name="logout" size={20} color="#fff" />
+      </TouchableOpacity>
+    </View>
   );
 }
 
 export default function App() {
   return (
-    <NavigationContainer>
-      <Stack.Navigator initialRouteName="Login">
-        <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
-        <Stack.Screen name="Register" component={RegisterScreen} options={{ headerShown: false }} />
-      </Stack.Navigator>
-      <StatusBar style="auto" />
-    </NavigationContainer>
+    <AuthProvider>
+      <NavigationContainer>
+        <Stack.Navigator initialRouteName="Login">
+          <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
+          <Stack.Screen name="Register" component={RegisterScreen} options={{ headerShown: false }} />
+          <Stack.Screen name="Home" component={HomeScreen} options={{ headerShown: false }} />
+        </Stack.Navigator>
+        <StatusBar style="auto" />
+      </NavigationContainer>
+    </AuthProvider>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
     padding: 20,
